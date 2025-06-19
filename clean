@@ -1,0 +1,99 @@
+<#
+.SYNOPSIS
+    Removes known tracking and security software traces (BitLocker, CrowdStrike) from a Windows 10 machine.
+
+.DESCRIPTION
+    This script attempts to find and remove traces of BitLocker and CrowdStrike software, including services, drivers, files, and registry keys.
+    NOTE: Removing security software may violate company policies or local laws. Use with caution and full authorization.
+    You must run this script as Administrator.
+
+#>
+
+# Function to Remove BitLocker Traces
+function Remove-BitLockerTraces {
+    Write-Host "`n--- Removing BitLocker Traces ---" -ForegroundColor Yellow
+
+    # Disable BitLocker (if any drive is encrypted)
+    $bitlockerVolumes = Get-BitLockerVolume -ErrorAction SilentlyContinue
+    if ($bitlockerVolumes) {
+        foreach ($vol in $bitlockerVolumes) {
+            if ($vol.ProtectionStatus -eq "On") {
+                Write-Host "Disabling BitLocker on $($vol.MountPoint)" -ForegroundColor Cyan
+                Disable-BitLocker -MountPoint $vol.MountPoint
+            }
+        }
+    }
+
+    # Remove BitLocker-related services (Windows built-in; cannot be uninstalled)
+    # Attempt to disable BitLocker service (not recommended, but requested)
+    $service = Get-Service -Name "BDESVC" -ErrorAction SilentlyContinue
+    if ($service) {
+        Set-Service -Name "BDESVC" -StartupType Disabled
+        Stop-Service -Name "BDESVC" -Force
+        Write-Host "BitLocker Drive Encryption Service disabled." -ForegroundColor Green
+    }
+
+    # Remove BitLocker registry keys (not recommended, but for completeness)
+    Remove-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\FVE" -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Host "BitLocker traces removal attempted." -ForegroundColor Green
+}
+
+# Function to Remove CrowdStrike Traces
+function Remove-CrowdStrikeTraces {
+    Write-Host "`n--- Removing CrowdStrike Traces ---" -ForegroundColor Yellow
+
+    # Stop and remove CrowdStrike Falcon Sensor service
+    $csService = Get-Service -Name "CSFalconService" -ErrorAction SilentlyContinue
+    if ($csService) {
+        Stop-Service -Name "CSFalconService" -Force
+        sc.exe delete "CSFalconService"
+        Write-Host "CrowdStrike Falcon service stopped and deleted." -ForegroundColor Green
+    }
+
+    # Uninstall CrowdStrike Falcon Sensor (if installed)
+    $csProduct = Get-WmiObject -Query "SELECT * FROM Win32_Product WHERE Name LIKE '%CrowdStrike%'" -ErrorAction SilentlyContinue
+    if ($csProduct) {
+        foreach ($prod in $csProduct) {
+            Write-Host "Uninstalling $($prod.Name)" -ForegroundColor Cyan
+            $prod.Uninstall()
+        }
+    }
+
+    # Remove CrowdStrike folders
+    $paths = @(
+        "C:\Program Files\CrowdStrike",
+        "C:\ProgramData\CrowdStrike"
+    )
+    foreach ($path in $paths) {
+        if (Test-Path $path) {
+            Remove-Item -Path $path -Recurse -Force
+            Write-Host "Removed folder: $path" -ForegroundColor Green
+        }
+    }
+
+    # Remove CrowdStrike registry keys
+    $csRegPaths = @(
+        "HKLM:\SYSTEM\CurrentControlSet\Services\CSFalconService",
+        "HKLM:\SOFTWARE\CrowdStrike"
+    )
+    foreach ($reg in $csRegPaths) {
+        if (Test-Path $reg) {
+            Remove-Item -Path $reg -Recurse -Force
+            Write-Host "Removed registry key: $reg" -ForegroundColor Green
+        }
+    }
+
+    Write-Host "CrowdStrike traces removal attempted." -ForegroundColor Green
+}
+
+# Main Script
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    Write-Host "Run this script as Administrator!" -ForegroundColor Red
+    exit 1
+}
+
+Remove-BitLockerTraces
+Remove-CrowdStrikeTraces
+
+Write-Host "`nAll requested tracking software traces removal attempted.`n" -ForegroundColor Magenta
